@@ -13,6 +13,7 @@ import numpy as np
 import librosa
 import soundfile as sf
 import gc
+import pandas as pd
 
 
 def find_audio_files(folder_path: str, recursive: bool = False) -> List[str]:
@@ -118,57 +119,86 @@ def create_audio_sample(audio_path: str, target_sr: int = 16000) -> Dict:
         raise RuntimeError(f"Error creating audio sample from {audio_path}: {e}")
 
 
-def read_dataset_folder(folder_path: str, target_sr: int = 16000) -> List[Dict]:
+def read_dataset_folder(folder_path: str, target_sr: int = 16000, batch_size: int = 100) -> int:
     """
-    Read all audio files from data folder and convert them to the required format.
-    
-    Args:
-        folder_path: Path to the data folder
-        target_sr: Target sampling rate (default: 16000)
-        
-    Returns:
-        List of audio samples in the required format
+    Read all audio files from data folder and save them to Parquet in batches to avoid OOM.
+    Returns the number of processed samples.
     """
     print(f"Reading audio folder: {folder_path}")
-    
-    # Find all audio files
     audio_files = find_audio_files(folder_path)
-    
     if not audio_files:
         print("No audio files found in the specified folder.")
-        return []
-    
+        return 0
+
     print(f"Found {len(audio_files)} audio files")
-    
-    # Convert each audio file to the required format
-    samples = []
+    parent_dir = os.path.dirname(os.path.abspath(folder_path))
+    folder_name = os.path.basename(os.path.normpath(folder_path))
+    output_path = os.path.join(parent_dir, f"{folder_name}.parquet")
+    print(f"Saving to: {output_path}")
+
+    batch = []
     successful_conversions = 0
-    
+    total_files = len(audio_files)
+    first_sample = None
+
     for i, audio_file in enumerate(audio_files, 1):
         try:
-            print(f"Processing {i}/{len(audio_files)}: {os.path.basename(audio_file)}")
-            
+            print(f"Processing {i}/{total_files}: {os.path.basename(audio_file)}")
             sample = create_audio_sample(audio_file, target_sr)
-            samples.append(sample)
+            batch.append({
+                'path': sample['audio']['path'],
+                'array': sample['audio']['array'].tolist() if hasattr(sample['audio']['array'], 'tolist') else sample['audio']['array'],
+                'sampling_rate': sample['audio']['sampling_rate'],
+                'transcript': sample.get('transcript', ""),
+                'error': sample.get('error', None)
+            })
             successful_conversions += 1
-            
+            if first_sample is None:
+                first_sample = sample
         except Exception as e:
             print(f"Error processing {audio_file}: {e}")
-            # Add a placeholder sample with error information
-            error_sample = {
-                'audio': {
-                    'path': audio_file,
-                    'array': np.array([]),
-                    'sampling_rate': target_sr,
-                },
+            batch.append({
+                'path': audio_file,
+                'array': [],
+                'sampling_rate': target_sr,
                 'transcript': "",
                 'error': str(e)
-            }
-            samples.append(error_sample)
-    
-    print(f"Successfully converted {successful_conversions}/{len(audio_files)} files")
-    return samples
+            })
 
+        # Save batch to Parquet and clear memory
+        if len(batch) >= batch_size or i == total_files:
+            df = pd.DataFrame(batch)
+            if i == batch_size:
+                df.to_parquet(output_path, index=False)
+            else:
+                df.to_parquet(output_path, index=False, append=True)
+            batch.clear()
+            gc.collect()
+
+    print(f"Successfully converted {successful_conversions}/{total_files} files")
+
+    # Print first sample info
+    if first_sample:
+        print("\n" + "="*50)
+        print("FIRST SAMPLE EXAMPLE")
+        print("="*50)
+        print(f"Audio path: {first_sample['audio']['path']}")
+        print(f"Sampling rate: {first_sample['audio']['sampling_rate']}")
+        audio_array = first_sample['audio']['array']
+        array_info = safe_get_array_info(audio_array)
+        print(f"Audio array type: {array_info['type']}")
+        print(f"Audio array shape: {array_info['shape']}")
+        if 'dtype' in array_info:
+            print(f"Audio array dtype: {array_info['dtype']}")
+        if 'length' in array_info:
+            print(f"Audio array length: {array_info['length']}")
+        if 'min' in array_info and 'max' in array_info:
+            print(f"Audio array range: [{array_info['min']:.6f}, {array_info['max']:.6f}]")
+        if 'error' in first_sample:
+            print(f"Error: {first_sample['error']}")
+
+    gc.collect()
+    return successful_conversions
 
 def get_audio_info(samples: List[Dict]) -> Dict:
     """
@@ -310,8 +340,7 @@ def save_samples_to_parquet(samples: List[Dict], output_path: str):
 
 
 def read_dataset(folder_path: str, sample_rate: int):
-    """Example usage of the audio reader functions."""
-
+    """Optimized usage to avoid OOM."""
     if not os.path.exists(folder_path):
         print(f"Error: Folder '{folder_path}' does not exist.")
         return
@@ -320,61 +349,11 @@ def read_dataset(folder_path: str, sample_rate: int):
         print(f"Error: '{folder_path}' is not a directory.")
         return
 
-    # Read folder
-    samples = read_dataset_folder(folder_path, target_sr=sample_rate)
+    # Process and save in batches
+    num_samples = read_dataset_folder(folder_path, target_sr=sample_rate, batch_size=100)
+    print(f"Total processed samples: {num_samples}")
 
-    if samples:
-        # Print audio info
-        info = get_audio_info(samples)
-        print("\n" + "="*50)
-        print("AUDIO INFORMATION")
-        print("="*50)
-        for key, value in info.items():
-            if isinstance(value, float):
-                print(f"{key}: {value:.2f}")
-            else:
-                print(f"{key}: {value}")
-
-        parent_dir = os.path.dirname(os.path.abspath(folder_path))
-        folder_name = os.path.basename(os.path.normpath(folder_path))
-        output_path = os.path.join(parent_dir, f"{folder_name}.parquet")
-        print(f"No output path provided. Defaulting to: {output_path}")
-
-        # Save to output file
-        save_samples_to_parquet(samples, output_path)
-
-        # Print first sample as example
-        if samples:
-            print("\n" + "="*50)
-            print("FIRST SAMPLE EXAMPLE")
-            print("="*50)
-            first_sample = samples[0]
-            print(f"Audio path: {first_sample['audio']['path']}")
-            print(f"Sampling rate: {first_sample['audio']['sampling_rate']}")
-
-            # Safely get array information
-            audio_array = first_sample['audio']['array']
-            array_info = safe_get_array_info(audio_array)
-
-            print(f"Audio array type: {array_info['type']}")
-            print(f"Audio array shape: {array_info['shape']}")
-            if 'dtype' in array_info:
-                print(f"Audio array dtype: {array_info['dtype']}")
-            if 'length' in array_info:
-                print(f"Audio array length: {array_info['length']}")
-            if 'min' in array_info and 'max' in array_info:
-                print(f"Audio array range: [{array_info['min']:.6f}, {array_info['max']:.6f}]")
-
-            if 'error' in first_sample:
-                print(f"Error: {first_sample['error']}")
-
-        # Xoá các biến lớn để giải phóng bộ nhớ
-        del samples
-        del first_sample
-        del audio_array
-        gc.collect()
-
-    return output_path
+    return num_samples
 
 if __name__ == "__main__":
     # Example usage without command line arguments
