@@ -12,6 +12,7 @@ from typing import Dict, List, Tuple
 import numpy as np
 import librosa
 import soundfile as sf
+import gc
 
 
 def find_audio_files(folder_path: str, recursive: bool = False) -> List[str]:
@@ -308,21 +309,20 @@ def save_samples_to_parquet(samples: List[Dict], output_path: str):
         print(f"Error saving samples to Parquet {output_path}: {e}")
 
 
-def read_dataset(folder_path: str,
-       sample_rate: int):
+def read_dataset(folder_path: str, sample_rate: int):
     """Example usage of the audio reader functions."""
-    
+
     if not os.path.exists(folder_path):
         print(f"Error: Folder '{folder_path}' does not exist.")
         return
-    
+
     if not os.path.isdir(folder_path):
         print(f"Error: '{folder_path}' is not a directory.")
         return
-    
+
     # Read folder
     samples = read_dataset_folder(folder_path, target_sr=sample_rate)
-    
+
     if samples:
         # Print audio info
         info = get_audio_info(samples)
@@ -334,7 +334,6 @@ def read_dataset(folder_path: str,
                 print(f"{key}: {value:.2f}")
             else:
                 print(f"{key}: {value}")
-        
 
         parent_dir = os.path.dirname(os.path.abspath(folder_path))
         folder_name = os.path.basename(os.path.normpath(folder_path))
@@ -343,7 +342,7 @@ def read_dataset(folder_path: str,
 
         # Save to output file
         save_samples_to_parquet(samples, output_path)
-        
+
         # Print first sample as example
         if samples:
             print("\n" + "="*50)
@@ -352,11 +351,11 @@ def read_dataset(folder_path: str,
             first_sample = samples[0]
             print(f"Audio path: {first_sample['audio']['path']}")
             print(f"Sampling rate: {first_sample['audio']['sampling_rate']}")
-            
+
             # Safely get array information
             audio_array = first_sample['audio']['array']
             array_info = safe_get_array_info(audio_array)
-            
+
             print(f"Audio array type: {array_info['type']}")
             print(f"Audio array shape: {array_info['shape']}")
             if 'dtype' in array_info:
@@ -365,9 +364,16 @@ def read_dataset(folder_path: str,
                 print(f"Audio array length: {array_info['length']}")
             if 'min' in array_info and 'max' in array_info:
                 print(f"Audio array range: [{array_info['min']:.6f}, {array_info['max']:.6f}]")
-            
+
             if 'error' in first_sample:
                 print(f"Error: {first_sample['error']}")
+
+        # Xoá các biến lớn để giải phóng bộ nhớ
+        del samples
+        del first_sample
+        del audio_array
+        gc.collect()
+
     return output_path
 
 if __name__ == "__main__":

@@ -501,6 +501,7 @@ if __name__ == "__main__":
         if not all(required_minio):
             print("❌ Missing MinIO arguments for download. Exiting.")
             sys.exit(1)
+
         minio_client = MinIOClient(
             endpoint=MINIO_ENDPOINT,
             access_key=MINIO_ACCESS_KEY,
