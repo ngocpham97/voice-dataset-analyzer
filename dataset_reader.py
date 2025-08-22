@@ -171,7 +171,7 @@ def read_dataset_folder(folder_path: str, target_sr: int = 16000, batch_size: in
             if i == batch_size:
                 df.to_parquet(output_path, index=False)
             else:
-                df.to_parquet(output_path, index=False, append=True)
+                df.to_parquet(output_path, index=False)
             batch.clear()
             gc.collect()
 
@@ -198,7 +198,7 @@ def read_dataset_folder(folder_path: str, target_sr: int = 16000, batch_size: in
             print(f"Error: {first_sample['error']}")
 
     gc.collect()
-    return successful_conversions
+    return output_path
 
 def get_audio_info(samples: List[Dict]) -> Dict:
     """
